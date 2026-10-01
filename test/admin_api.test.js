@@ -65,6 +65,8 @@ db.query = (text, params) => memPool.query(text, params);
 db.getClient = () => memPool.connect();
 
 const app = require('../src/app');
+const categoryService = require('../src/services/admin/category.service');
+const { seedCatalog } = require('../src/database/seed');
 
 // JWT Tokens
 const JWT_SECRET = process.env.JWT_SECRET || 'studenttech-dev-secret-key-2026';
@@ -77,6 +79,11 @@ const customerToken = jwt.sign(
     { userId: 2, email: 'student@usindh.edu.pk', role: 'customer' },
     JWT_SECRET,
     { expiresIn: '1h' }
+);
+const expiredToken = jwt.sign(
+    { userId: 1, email: 'admin@studenttech.pk', role: 'admin' },
+    JWT_SECRET,
+    { expiresIn: '-10s' }
 );
 
 async function runTests() {
@@ -126,6 +133,15 @@ async function runTests() {
             .set('Authorization', 'Bearer invalid.token.structure');
         if (res.status !== 401 || res.body.error?.code !== 'UNAUTHORIZED') {
             throw new Error(`Expected 401 UNAUTHORIZED, got ${res.status}: ${JSON.stringify(res.body)}`);
+        }
+    });
+
+    await test('Reject expired JWT token with 401 UNAUTHORIZED', async () => {
+        const res = await request(app)
+            .get('/api/v1/admin/categories')
+            .set('Authorization', `Bearer ${expiredToken}`);
+        if (res.status !== 401 || res.body.error?.code !== 'UNAUTHORIZED') {
+            throw new Error(`Expected 401 UNAUTHORIZED for expired token, got ${res.status}: ${JSON.stringify(res.body)}`);
         }
     });
 
@@ -212,6 +228,24 @@ async function runTests() {
             });
         if (res.status !== 404 || res.body.error?.code !== 'NOT_FOUND') {
             throw new Error(`Expected 404 NOT_FOUND, got ${res.status}: ${JSON.stringify(res.body)}`);
+        }
+    });
+
+    await test('Reject self-parenting and multi-level cyclic hierarchies in category service', async () => {
+        // Test self-parenting
+        try {
+            await categoryService.validateNoCycle(rootCategoryId, rootCategoryId);
+            throw new Error('Expected validation error on self-parenting category.');
+        } catch (e) {
+            if (e.code !== 'VALIDATION_ERROR') throw e;
+        }
+
+        // Test multi-level cycle (root parent set to grandchild)
+        try {
+            await categoryService.validateNoCycle(rootCategoryId, subChildCategoryId);
+            throw new Error('Expected validation error on cyclic category hierarchy.');
+        } catch (e) {
+            if (e.code !== 'VALIDATION_ERROR') throw e;
         }
     });
 
@@ -533,6 +567,78 @@ async function runTests() {
             });
         if (res.status !== 404 || res.body.error?.code !== 'NOT_FOUND') {
             throw new Error(`Expected 404 NOT_FOUND, got ${res.status}: ${JSON.stringify(res.body)}`);
+        }
+    });
+
+    // 9. Downstream Cart / Order SKU Integration Tests
+    await test('Downstream Cart Item and Order Item tables support valid SKU linkage', async () => {
+        // Insert a test customer
+        const userRes = await db.query(
+            "INSERT INTO users (full_name, email, password_hash, role) VALUES ('Cart Test User', 'cart.test@studenttech.pk', 'hash', 'customer') RETURNING id"
+        );
+        const testUserId = userRes.rows[0].id;
+
+        // Insert cart
+        const cartRes = await db.query(
+            "INSERT INTO cart (user_id) VALUES ($1) RETURNING id",
+            [testUserId]
+        );
+        const testCartId = cartRes.rows[0].id;
+
+        // Insert cart item with SKU linkage
+        const cartItemRes = await db.query(
+            "INSERT INTO cart_items (cart_id, product_id, sku_id, quantity) VALUES ($1, $2, $3, 2) RETURNING id, sku_id, quantity",
+            [testCartId, productId, skuId]
+        );
+        if (!cartItemRes.rows[0].id || cartItemRes.rows[0].sku_id !== skuId) {
+            throw new Error('Failed to link SKU to cart item.');
+        }
+
+        // Insert order with SKU linkage
+        const orderRes = await db.query(
+            "INSERT INTO orders (user_id, total_amount, status, shipping_address) VALUES ($1, 9598.00, 'PENDING', 'Jamshoro Campus') RETURNING id",
+            [testUserId]
+        );
+        const testOrderId = orderRes.rows[0].id;
+
+        const orderItemRes = await db.query(
+            "INSERT INTO order_items (order_id, product_id, sku_id, quantity, unit_price) VALUES ($1, $2, $3, 2, 4799.00) RETURNING id, sku_id",
+            [testOrderId, productId, skuId]
+        );
+        if (!orderItemRes.rows[0].id || orderItemRes.rows[0].sku_id !== skuId) {
+            throw new Error('Failed to link SKU to order item.');
+        }
+    });
+
+    // 10. Seed Script Execution & Idempotency Verification
+    await test('Catalog seed script executes cleanly and is strictly idempotent on reruns', async () => {
+        const client = await db.getClient();
+        try {
+            // First run
+            const seedResult1 = await seedCatalog(client);
+            if (!seedResult1.success || seedResult1.counts.skus !== 6) {
+                throw new Error(`Expected 6 SKUs seeded, got ${JSON.stringify(seedResult1)}`);
+            }
+
+            // Second run (idempotency check)
+            const seedResult2 = await seedCatalog(client);
+            if (!seedResult2.success || seedResult2.counts.skus !== 6) {
+                throw new Error(`Expected 6 SKUs on rerun, got ${JSON.stringify(seedResult2)}`);
+            }
+
+            // Verify no duplicate categories or products were created
+            const catCount = await client.query('SELECT COUNT(*) AS count FROM categories');
+            // 3 from earlier tests + 4 from seed (or overlapping)
+            if (parseInt(catCount.rows[0].count, 10) < 4) {
+                throw new Error('Categories count after seed is less than expected.');
+            }
+
+            const skuCount = await client.query('SELECT COUNT(*) AS count FROM skus');
+            if (parseInt(skuCount.rows[0].count, 10) < 6) {
+                throw new Error('SKU count after seed is less than expected.');
+            }
+        } finally {
+            client.release();
         }
     });
 

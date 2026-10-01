@@ -10,6 +10,7 @@
     "start": "node src/server.js",
     "dev": "node src/server.js",
     "migrate": "node src/database/migrate.js",
+    "seed": "node src/database/seed.js",
     "validate:db": "node src/database/validate_schema.js",
     "test": "node src/database/validate_schema.js && node test/admin_api.test.js",
     "test:api": "node test/admin_api.test.js"

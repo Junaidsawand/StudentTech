@@ -2,14 +2,17 @@
   "name": "studenttech",
   "version": "1.0.0",
   "description": "StudentTech is a student-focused e-commerce platform designed to provide university and college students with affordable, curated technology accessories, essentials, and study gear. Tailored specifically to the academic lifestyle and student budgets, the platform streamlines the discovery and purchasing experience for essential hardware, peripherals, and everyday tech accessories.",
-  "main": "index.js",
+  "main": "src/server.js",
   "directories": {
     "doc": "docs"
   },
   "scripts": {
+    "start": "node src/server.js",
+    "dev": "node src/server.js",
     "migrate": "node src/database/migrate.js",
     "validate:db": "node src/database/validate_schema.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node src/database/validate_schema.js && node test/admin_api.test.js",
+    "test:api": "node test/admin_api.test.js"
   },
   "repository": {
     "type": "git",
@@ -24,10 +27,14 @@
   },
   "homepage": "https://github.com/Junaidsawand/StudentTech#readme",
   "dependencies": {
+    "bcryptjs": "^3.0.3",
     "dotenv": "^18.0.5",
+    "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
     "pg": "^8.23.1"
   },
   "devDependencies": {
-    "pg-mem": "^3.0.14"
+    "pg-mem": "^3.0.14",
+    "supertest": "^7.3.0"
   }
 }
